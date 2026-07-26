@@ -64,32 +64,7 @@ sudo pacman -S libpcap tk
 pip3 install scapy netifaces psutil
 ```
 
-### 3. Скомпилируйте бинарники
-
-В папке с исходниками (`src/`) выполните:
-
-```bash
-chmod +x build_all.sh
-./build_all.sh
-```
-
-Или вручную:
-
-```bash
-g++ -O2 -pthread DHCPstarvation.cpp -o dhcp_starvation -lpcap -std=c++11
-g++ -O2 -pthread ArPSpoof.cpp -o ARPspoof -lpcap -std=c++11
-# ... и так далее для всех .cpp (см. скрипт)
-```
-
-Скопируйте все скомпилированные бинарники в папку `bin/`:
-
-```bash
-mkdir -p bin
-cp dhcp_starvation ARPspoof NPtcpT NPudpT NPicmpT NParpT mac_flood dnsspoof intercept bin/
-chmod +x bin/*
-```
-
-### 4. Запустите GUI
+### 3. Запустите GUI
 
 ```bash
 sudo python3 newgui.py
