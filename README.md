@@ -48,31 +48,36 @@ cd Gotcha-linux
 
 🐧 Linux
 
-Arch Linux / Manjaro
-```
+```Arch Linux / Manjaro
 sudo pacman -S libpcap qt5-base base-devel python-gobject gtk3 arp-scan
-pip3 install scapy netifaces```
+pip3 install scapy netifaces
+```
 
-Debian / Ubuntu / Kali```
+```Debian / Ubuntu / Kali
 sudo apt update
 sudo apt install libpcap-dev qtbase5-dev build-essential python3-gi gir1.2-gtk-3.0 arp-scan
-pip3 install scapy netifaces```
+pip3 install scapy netifaces
+```
 
-Fedora / RHEL```
+```Fedora / RHEL
 sudo dnf install libpcap-devel qt5-qtbase-devel gcc-c++ make python3-gobject gtk3-devel arp-scan
-pip3 install scapy netifaces```
+pip3 install scapy netifaces
+```
 
-ALT Linux```
+```ALT Linux
 sudo apt-get install libpcap-devel qt5-qtbase-devel gcc-c++ make python3-module-gi gtk+3.0 arp-scan
-pip3 install scapy netifaces```
-
-Gentoo```
+pip3 install scapy netifaces
+```
+ 
+```Gentoo
 sudo emerge net-libs/libpcap dev-qt/qtgui:5 sys-devel/gcc sys-devel/make dev-python/pygobject x11-libs/gtk+:3 net-analyzer/arp-scan
-pip3 install scapy netifaces```
+pip3 install scapy netifaces
+```
 
-Void Linux```
+```Void Linux
 sudo xbps-install -S libpcap-devel qt5-devel base-devel python3-PyGObject gtk+3-devel arp-scan
-pip3 install scapy netifaces```
+pip3 install scapy netifaces
+```
 
 ### 3. Запустите GUI
 
