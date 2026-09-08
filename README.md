@@ -48,7 +48,8 @@ cd Gotcha-linux
 
 🐧 Linux
 
-```Arch Linux / Manjaro
+Arch Linux / Manjaro
+```
 sudo pacman -S libpcap qt5-base base-devel python-gobject gtk3 arp-scan
 pip3 install scapy netifaces
 ```
