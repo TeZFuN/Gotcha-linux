@@ -3,7 +3,7 @@
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib
+from gi.repository import Gtk, GLib, Gdk
 
 import subprocess
 import threading
@@ -14,17 +14,14 @@ import time
 import sys
 import re
 import socket
-import ipaddress
 import tempfile
-import webbrowser
 from datetime import datetime
 
 # Scapy
 try:
-    from scapy.all import sniff, sendp, Ether, IP, TCP, UDP, ICMP, ARP, RandMAC, RandIP, Raw, get_if_hwaddr, srp
+    from scapy.all import sniff, sendp, Ether, IP, TCP, UDP, ICMP, ARP, Raw, IPv6
     from scapy.layers.inet import IP, TCP, UDP, ICMP
     from scapy.layers.l2 import Ether, ARP
-    from scapy.layers.dns import DNS, DNSQR, DNSRR
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
@@ -316,6 +313,10 @@ class GotchaGTK:
         self.edited_packet = None
         self.packet_counter = 0
         self.sniff_stop = threading.Event()
+
+        # Лимиты для перехвата
+        self.intercept_limit_packets = 0
+        self.intercept_limit_responses = 0
 
         # Блокировка для вкладки "Доступ"
         self.access_lock = threading.Lock()
@@ -866,12 +867,12 @@ class GotchaGTK:
         stats_frame.add(stats_grid)
         stats_grid.attach(Gtk.Label(label="Отправлено пакетов:"), 0, 0, 1, 1)
         self.dhcp_sent_label = Gtk.Label(label="0"); stats_grid.attach(self.dhcp_sent_label, 1, 0, 1, 1)
-        stats_grid.attach(Gtk.Label(label="Скорость (pps):"), 0, 1, 1, 1)
-        self.dhcp_rate_label = Gtk.Label(label="0"); stats_grid.attach(self.dhcp_rate_label, 1, 1, 1, 1)
-        stats_grid.attach(Gtk.Label(label="Уникальных MAC:"), 0, 2, 1, 1)
-        self.dhcp_unique_label = Gtk.Label(label="0"); stats_grid.attach(self.dhcp_unique_label, 1, 2, 1, 1)
-        stats_grid.attach(Gtk.Label(label="Захваченные IP:"), 0, 3, 1, 1)
-        self.dhcp_ips_label = Gtk.Label(label="0"); stats_grid.attach(self.dhcp_ips_label, 1, 3, 1, 1)
+        stats_grid.attach(Gtk.Label(label="Уникальных MAC:"), 0, 1, 1, 1)
+        self.dhcp_unique_label = Gtk.Label(label="0"); stats_grid.attach(self.dhcp_unique_label, 1, 1, 1, 1)
+        stats_grid.attach(Gtk.Label(label="Захвачено IP:"), 0, 2, 1, 1)
+        self.dhcp_ips_label = Gtk.Label(label="0"); stats_grid.attach(self.dhcp_ips_label, 1, 2, 1, 1)
+        stats_grid.attach(Gtk.Label(label="Скорость (pps):"), 0, 3, 1, 1)
+        self.dhcp_rate_label = Gtk.Label(label="0"); stats_grid.attach(self.dhcp_rate_label, 1, 3, 1, 1)
         stats_grid.attach(Gtk.Label(label="Время работы:"), 0, 4, 1, 1)
         self.dhcp_time_label = Gtk.Label(label="00:00:00"); stats_grid.attach(self.dhcp_time_label, 1, 4, 1, 1)
         tab.pack_start(stats_frame, False, False, 0)
@@ -895,13 +896,11 @@ class GotchaGTK:
         self.dhcp_attack_running = True
         self.dhcp_stats['start_time'] = time.time()
         self.dhcp_stats['sent_packets'] = 0
-        self.dhcp_stats['unique_macs'] = 0
-        with self.dhcp_lock:
-            self.dhcp_offered_ips.clear()
+        self.dhcp_offered_ips.clear()
         args = [self.dhcp_iface.get_active_text(), self.dhcp_pool.get_text(),
                 self.dhcp_count.get_text(), self.dhcp_delay.get_text(),
                 self.dhcp_offer.get_text(), self.dhcp_ack.get_text()]
-        self.run_binary('dhcp_starvation', args, self.dhcp_log, self.dhcp_status,
+        self.run_binary('DHCPstarvation', args, self.dhcp_log, self.dhcp_status,
                         self.dhcp_start_btn, self.dhcp_stop_btn)
         self.start_stats_timer('dhcp')
 
@@ -921,15 +920,15 @@ class GotchaGTK:
         grid.set_row_spacing(5)
         tab.pack_start(grid, False, False, 0)
 
-        grid.attach(Gtk.Label(label="Интерфейс:"), 0, 0, 1, 1)
-        self.arp_iface = self.create_iface_combo()
-        grid.attach(self.arp_iface, 1, 0, 1, 1)
-        grid.attach(Gtk.Label(label="IP цели:"), 0, 1, 1, 1)
+        grid.attach(Gtk.Label(label="Целевой IP:"), 0, 0, 1, 1)
         self.arp_target = Gtk.Entry(); self.arp_target.set_text("192.168.1.100"); self.arp_target.set_width_chars(20)
-        grid.attach(self.arp_target, 1, 1, 1, 1)
-        grid.attach(Gtk.Label(label="IP шлюза:"), 0, 2, 1, 1)
+        grid.attach(self.arp_target, 1, 0, 1, 1)
+        grid.attach(Gtk.Label(label="Шлюз:"), 0, 1, 1, 1)
         self.arp_gateway = Gtk.Entry(); self.arp_gateway.set_text("192.168.1.1"); self.arp_gateway.set_width_chars(20)
-        grid.attach(self.arp_gateway, 1, 2, 1, 1)
+        grid.attach(self.arp_gateway, 1, 1, 1, 1)
+        grid.attach(Gtk.Label(label="Интерфейс:"), 0, 2, 1, 1)
+        self.arp_iface = self.create_iface_combo()
+        grid.attach(self.arp_iface, 1, 2, 1, 1)
         grid.attach(Gtk.Label(label="Интервал (сек):"), 0, 3, 1, 1)
         self.arp_interval = Gtk.Entry(); self.arp_interval.set_text("2"); self.arp_interval.set_width_chars(10)
         grid.attach(self.arp_interval, 1, 3, 1, 1)
@@ -1157,11 +1156,11 @@ class GotchaGTK:
         stats_grid.set_margin_top(5)
         stats_grid.set_margin_bottom(5)
         stats_frame.add(stats_grid)
-        stats_grid.attach(Gtk.Label(label="Перехвачено запросов:"), 0, 0, 1, 1)
+        stats_grid.attach(Gtk.Label(label="Перехвачено:"), 0, 0, 1, 1)
         self.dns_intercepted_label = Gtk.Label(label="0"); stats_grid.attach(self.dns_intercepted_label, 1, 0, 1, 1)
-        stats_grid.attach(Gtk.Label(label="Отправлено подмен:"), 0, 1, 1, 1)
+        stats_grid.attach(Gtk.Label(label="Подменено:"), 0, 1, 1, 1)
         self.dns_spoofed_label = Gtk.Label(label="0"); stats_grid.attach(self.dns_spoofed_label, 1, 1, 1, 1)
-        stats_grid.attach(Gtk.Label(label="Скорость (spo/s):"), 0, 2, 1, 1)
+        stats_grid.attach(Gtk.Label(label="Скорость (spoof/s):"), 0, 2, 1, 1)
         self.dns_rate_label = Gtk.Label(label="0"); stats_grid.attach(self.dns_rate_label, 1, 2, 1, 1)
         stats_grid.attach(Gtk.Label(label="Время работы:"), 0, 3, 1, 1)
         self.dns_time_label = Gtk.Label(label="00:00:00"); stats_grid.attach(self.dns_time_label, 1, 3, 1, 1)
@@ -1180,53 +1179,36 @@ class GotchaGTK:
         self.dns_running = False
 
     def add_dns_rule(self, w):
-        dom = self.dns_domain_entry.get_text().strip()
+        domain = self.dns_domain_entry.get_text().strip()
         ip = self.dns_ip_entry.get_text().strip()
-        if not dom or not ip:
-            self.dns_log.append_safe("Заполните оба поля", 'warning')
+        if not domain or not ip:
+            self.dns_log.append_safe("Введите домен и IP", 'error')
             return
-        try:
-            ipaddress.ip_address(ip)
-        except:
-            self.dns_log.append_safe(f"Неверный IP: {ip}", 'error')
-            return
-        self.dns_rules_store.append([dom, ip])
-        self.dns_domain_entry.set_text("")
-        self.dns_ip_entry.set_text("")
-        self.dns_log.append_safe(f"Правило добавлено: {dom} -> {ip}", 'success')
+        self.dns_rules_store.append([domain, ip])
+        self.dns_spoof_rules[domain] = ip
+        self.dns_log.append_safe(f"Правило добавлено: {domain} -> {ip}", 'success')
 
     def del_dns_rule(self, w):
-        sel = self.dns_rules_tree.get_selection()
-        model, iter = sel.get_selected()
-        if iter:
-            model.remove(iter)
-            self.dns_log.append_safe("Правило удалено", 'info')
-        else:
-            self.dns_log.append_safe("Выберите правило для удаления", 'warning')
+        selection = self.dns_rules_tree.get_selection()
+        model, treeiter = selection.get_selected()
+        if treeiter:
+            domain = model[treeiter][0]
+            del self.dns_spoof_rules[domain]
+            model.remove(treeiter)
+            self.dns_log.append_safe(f"Правило удалено: {domain}", 'warning')
 
     def start_dns(self, w):
         if not is_root():
             self.show_warning("Ошибка", "Запустите программу с sudo.")
             return
-        if self.dns_rules_store.iter_n_children(None) == 0 and not self.dns_catchall.get_active():
-            self.dns_log.append_safe("Нет правил подмены", 'warning')
-            return
-        fd, path = tempfile.mkstemp(suffix='.hosts')
-        with os.fdopen(fd, 'w') as f:
-            if self.dns_catchall.get_active():
-                iter = self.dns_rules_store.get_iter_first()
-                if iter:
-                    ip = self.dns_rules_store[iter][1]
-                    f.write(f"* {ip}\n")
-            else:
-                for row in self.dns_rules_store:
-                    f.write(f"{row[1]} {row[0]}\n")
         self.dns_running = True
         self.dns_stats['start_time'] = time.time()
         self.dns_stats['intercepted'] = 0
         self.dns_stats['spoofed'] = 0
-        args = ['-i', self.dns_iface.get_active_text(), '-f', path]
-        self.run_binary('dnsspoof', args, self.dns_log, self.dns_status,
+        args = [self.dns_iface.get_active_text(), self.dns_ttl.get_text()]
+        if self.dns_catchall.get_active():
+            args.append("--catch-all")
+        self.run_binary('DNSSpoof', args, self.dns_log, self.dns_status,
                         self.dns_start_btn, self.dns_stop_btn)
         self.start_stats_timer('dns')
 
@@ -1234,7 +1216,7 @@ class GotchaGTK:
         self.dns_running = False
         self.stop_binary(self.dns_log, self.dns_status)
 
-    # ===== MAC flood =====
+    # ===== MAC Flood =====
     def create_mac_tab(self):
         tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         tab.set_margin_start(10)
@@ -1249,14 +1231,17 @@ class GotchaGTK:
         grid.attach(Gtk.Label(label="Интерфейс:"), 0, 0, 1, 1)
         self.mac_iface = self.create_iface_combo()
         grid.attach(self.mac_iface, 1, 0, 1, 1)
-        grid.attach(Gtk.Label(label="Время (сек):"), 0, 1, 1, 1)
-        self.mac_duration = Gtk.Entry(); self.mac_duration.set_text("60"); self.mac_duration.set_width_chars(10)
-        grid.attach(self.mac_duration, 1, 1, 1, 1)
-        grid.attach(Gtk.Label(label="MAC назначения:"), 0, 2, 1, 1)
-        self.mac_dst = Gtk.Entry(); self.mac_dst.set_text("ff:ff:ff:ff:ff:ff"); self.mac_dst.set_width_chars(20)
-        grid.attach(self.mac_dst, 1, 2, 1, 1)
-        self.mac_random = Gtk.CheckButton(label="Случайный MAC источника")
-        grid.attach(self.mac_random, 0, 3, 2, 1)
+        grid.attach(Gtk.Label(label="Количество:"), 0, 1, 1, 1)
+        self.mac_count = Gtk.Entry(); self.mac_count.set_text("10000"); self.mac_count.set_width_chars(10)
+        grid.attach(self.mac_count, 1, 1, 1, 1)
+        grid.attach(Gtk.Label(label="Задержка (мс):"), 0, 2, 1, 1)
+        self.mac_delay = Gtk.Entry(); self.mac_delay.set_text("10"); self.mac_delay.set_width_chars(10)
+        grid.attach(self.mac_delay, 1, 2, 1, 1)
+        grid.attach(Gtk.Label(label="Режим:"), 0, 3, 1, 1)
+        self.mac_mode = Gtk.ComboBoxText()
+        for m in ["Flood", "Random", "Sequential"]: self.mac_mode.append_text(m)
+        self.mac_mode.set_active(0)
+        grid.attach(self.mac_mode, 1, 3, 1, 1)
 
         controls, self.mac_start_btn, self.mac_stop_btn = self.create_attack_controls(self.start_mac, self.stop_mac)
         tab.pack_start(controls, False, False, 0)
@@ -1270,7 +1255,7 @@ class GotchaGTK:
         stats_grid.set_margin_top(5)
         stats_grid.set_margin_bottom(5)
         stats_frame.add(stats_grid)
-        stats_grid.attach(Gtk.Label(label="Отправлено кадров:"), 0, 0, 1, 1)
+        stats_grid.attach(Gtk.Label(label="Отправлено фреймов:"), 0, 0, 1, 1)
         self.mac_sent_label = Gtk.Label(label="0"); stats_grid.attach(self.mac_sent_label, 1, 0, 1, 1)
         stats_grid.attach(Gtk.Label(label="Скорость (fps):"), 0, 1, 1, 1)
         self.mac_rate_label = Gtk.Label(label="0"); stats_grid.attach(self.mac_rate_label, 1, 1, 1, 1)
@@ -1287,7 +1272,7 @@ class GotchaGTK:
         self.mac_log = LogWidget(300)
         tab.pack_start(self.mac_log, True, True, 0)
         self.add_save_log_button(tab, self.mac_log)
-        self.notebook.append_page(tab, Gtk.Label(label="MAC flood"))
+        self.notebook.append_page(tab, Gtk.Label(label="MAC Flood"))
         self.mac_running = False
 
     def start_mac(self, w):
@@ -1297,11 +1282,9 @@ class GotchaGTK:
         self.mac_running = True
         self.mac_stats['start_time'] = time.time()
         self.mac_stats['sent_frames'] = 0
-        args = [self.mac_iface.get_active_text(), self.mac_duration.get_text(),
-                self.mac_dst.get_text()]
-        if self.mac_random.get_active():
-            args.append('--random-mac')
-        self.run_binary('mac_flood', args, self.mac_log, self.mac_status,
+        args = [self.mac_iface.get_active_text(), self.mac_count.get_text(),
+                self.mac_delay.get_text(), self.mac_mode.get_active_text().lower()]
+        self.run_binary('MACflood', args, self.mac_log, self.mac_status,
                         self.mac_start_btn, self.mac_stop_btn)
         self.start_stats_timer('mac')
 
@@ -1309,181 +1292,154 @@ class GotchaGTK:
         self.mac_running = False
         self.stop_binary(self.mac_log, self.mac_status)
 
-    # ===== Перехват =====
+    # ===== Перехват пакетов (Intercept) =====
     def create_intercept_tab(self):
-        tab = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         tab.set_margin_start(10)
         tab.set_margin_end(10)
         tab.set_margin_top(10)
         tab.set_margin_bottom(10)
 
-        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        tab.pack_start(left, True, True, 0)
-
-        params = Gtk.Frame(label="Параметры перехвата")
         grid = Gtk.Grid()
-        grid.set_column_spacing(5)
+        grid.set_column_spacing(10)
         grid.set_row_spacing(5)
-        grid.set_margin_start(5)
-        grid.set_margin_end(5)
-        grid.set_margin_top(5)
-        grid.set_margin_bottom(5)
-        params.add(grid)
+        tab.pack_start(grid, False, False, 0)
+
         grid.attach(Gtk.Label(label="Интерфейс:"), 0, 0, 1, 1)
-        self.int_iface = self.create_iface_combo()
-        grid.attach(self.int_iface, 1, 0, 1, 1)
-        grid.attach(Gtk.Label(label="Фильтр:"), 0, 1, 1, 1)
-        self.int_filter = Gtk.Entry()
-        self.int_filter.set_width_chars(20)
-        grid.attach(self.int_filter, 1, 1, 1, 1)
-        grid.attach(Gtk.Label(label="Кол-во ответов:"), 0, 2, 1, 1)
-        self.int_resp = Gtk.Entry()
-        self.int_resp.set_text("4")
-        self.int_resp.set_width_chars(10)
-        grid.attach(self.int_resp, 1, 2, 1, 1)
-        grid.attach(Gtk.Label(label="Кол-во пакетов:"), 0, 3, 1, 1)
-        self.int_count = Gtk.Entry()
-        self.int_count.set_text("10")
-        self.int_count.set_width_chars(10)
-        grid.attach(self.int_count, 1, 3, 1, 1)
+        self.intercept_iface = self.create_iface_combo()
+        grid.attach(self.intercept_iface, 1, 0, 1, 1)
+
+        grid.attach(Gtk.Label(label="Фильтр BPF:"), 0, 1, 1, 1)
+        self.intercept_filter = Gtk.Entry()
+        self.intercept_filter.set_text("tcp or udp or icmp")
+        grid.attach(self.intercept_filter, 1, 1, 1, 1)
+
+        # Поля для лимитов (0 = бесконечно)
+        grid.attach(Gtk.Label(label="Макс. пакетов (0=∞):"), 0, 2, 1, 1)
+        self.intercept_limit_pkts_entry = Gtk.Entry()
+        self.intercept_limit_pkts_entry.set_text("0")
+        self.intercept_limit_pkts_entry.set_width_chars(10)
+        grid.attach(self.intercept_limit_pkts_entry, 1, 2, 1, 1)
+
+        grid.attach(Gtk.Label(label="Макс. ответов (0=∞):"), 0, 3, 1, 1)
+        self.intercept_limit_resp_entry = Gtk.Entry()
+        self.intercept_limit_resp_entry.set_text("0")
+        self.intercept_limit_resp_entry.set_width_chars(10)
+        grid.attach(self.intercept_limit_resp_entry, 1, 3, 1, 1)
 
         btn_box = Gtk.Box(spacing=5)
-        grid.attach(btn_box, 0, 4, 2, 1)
-        self.int_start_btn = Gtk.Button.new_with_label("Начать перехват")
-        self.int_start_btn.connect("clicked", self.start_sniff)
-        btn_box.pack_start(self.int_start_btn, False, False, 0)
-        self.int_stop_btn = Gtk.Button.new_with_label("Остановить")
-        self.int_stop_btn.connect("clicked", self.stop_sniff)
-        self.int_stop_btn.set_sensitive(False)
-        btn_box.pack_start(self.int_stop_btn, False, False, 0)
-        capture_btn = Gtk.Button.new_with_label("Захватить выбранный")
-        capture_btn.connect("clicked", self.capture_selected)
-        btn_box.pack_start(capture_btn, False, False, 0)
-        edit_btn = Gtk.Button.new_with_label("Редактировать")
-        edit_btn.connect("clicked", self.edit_selected)
-        btn_box.pack_start(edit_btn, False, False, 0)
+        btn_box.set_margin_top(10)
+        start_int = Gtk.Button.new_with_label("Начать перехват")
+        start_int.connect("clicked", self.start_sniff)
+        btn_box.pack_start(start_int, False, False, 0)
 
-        left.pack_start(params, False, False, 0)
+        stop_int = Gtk.Button.new_with_label("Остановить")
+        stop_int.connect("clicked", self.stop_sniff)
+        stop_int.set_sensitive(False)
+        btn_box.pack_start(stop_int, False, False, 0)
 
-        packets_frame = Gtk.Frame(label="Перехваченные пакеты")
-        self.packet_store = Gtk.ListStore(str, str, str, str, str, str, str, object)
-        self.packet_tree = Gtk.TreeView(model=self.packet_store)
-        self.packet_tree.set_headers_visible(True)
-        cols = ["№","Время","Источник","Назначение","Протокол","Длина","Информация"]
-        for i, col in enumerate(cols):
-            renderer = Gtk.CellRendererText()
-            column = Gtk.TreeViewColumn(col, renderer, text=i)
-            column.set_resizable(True)
-            self.packet_tree.append_column(column)
-        self.packet_tree.connect("cursor-changed", self.on_packet_select)
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scrolled.add(self.packet_tree)
-        packets_frame.add(scrolled)
-        left.pack_start(packets_frame, True, True, 0)
+        edit_pkt = Gtk.Button.new_with_label("Редактировать выбранный")
+        edit_pkt.connect("clicked", self.edit_selected_packet)
+        btn_box.pack_start(edit_pkt, False, False, 0)
 
-        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        tab.pack_start(right, False, False, 0)
+        replay_pkt = Gtk.Button.new_with_label("Повторить выбранный")
+        replay_pkt.connect("clicked", self.replay_selected_packet)
+        btn_box.pack_start(replay_pkt, False, False, 0)
 
-        control = Gtk.Frame(label="Управление пакетами")
-        control_grid = Gtk.Grid()
-        control_grid.set_column_spacing(5)
-        control_grid.set_row_spacing(5)
-        control_grid.set_margin_start(5)
-        control_grid.set_margin_end(5)
-        control_grid.set_margin_top(5)
-        control_grid.set_margin_bottom(5)
-        control.add(control_grid)
-        control_grid.attach(Gtk.Label(label="Захваченный:"), 0, 0, 1, 1)
-        self.captured_label = Gtk.Label(label="Нет")
-        control_grid.attach(self.captured_label, 1, 0, 1, 1)
-        control_grid.attach(Gtk.Label(label="Отредактированный:"), 0, 1, 1, 1)
-        self.edited_label = Gtk.Label(label="Нет")
-        control_grid.attach(self.edited_label, 1, 1, 1, 1)
-        send_captured = Gtk.Button.new_with_label("Отправить захваченный")
-        send_captured.connect("clicked", self.send_captured)
-        control_grid.attach(send_captured, 0, 2, 2, 1)
-        send_edited = Gtk.Button.new_with_label("Отправить отредактированный")
-        send_edited.connect("clicked", self.send_edited)
-        control_grid.attach(send_edited, 0, 3, 2, 1)
-        clear_btn = Gtk.Button.new_with_label("Очистить список")
-        clear_btn.connect("clicked", self.clear_packets)
-        control_grid.attach(clear_btn, 0, 4, 2, 1)
-        right.pack_start(control, False, False, 0)
+        tab.pack_start(btn_box, False, False, 0)
 
-        log_frame = Gtk.Frame(label="Лог перехвата")
-        self.int_log = LogWidget(200)
-        log_frame.add(self.int_log)
-        right.pack_start(log_frame, True, True, 0)
-        self.add_save_log_button(right, self.int_log)
+        tree_frame = Gtk.Frame(label="Перехваченные пакеты")
+        tree_frame.set_size_request(-1, 200)
+        self.intercept_store = Gtk.ListStore(int, str, str, str, str, object)
+        self.intercept_tree = Gtk.TreeView(model=self.intercept_store)
+        for i, title in enumerate(["#", "Time", "Source", "Destination", "Protocol"]):
+            col = Gtk.TreeViewColumn(title, Gtk.CellRendererText(), text=i)
+            self.intercept_tree.append_column(col)
+        tree_scrolled = Gtk.ScrolledWindow()
+        tree_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        tree_scrolled.add(self.intercept_tree)
+        tree_frame.add(tree_scrolled)
+        tab.pack_start(tree_frame, False, False, 0)
+
+        details_frame = Gtk.Frame(label="Детали пакета")
+        self.intercept_details = Gtk.TextView()
+        self.intercept_details.set_editable(False)
+        self.intercept_details.set_wrap_mode(Gtk.WrapMode.WORD)
+        details_scrolled = Gtk.ScrolledWindow()
+        details_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        details_scrolled.add(self.intercept_details)
+        details_frame.add(details_scrolled)
+        tab.pack_start(details_frame, True, True, 0)
+
+        self.intercept_status = Gtk.Label(label="Ожидание запуска...")
+        tab.pack_start(self.intercept_status, False, False, 0)
 
         self.notebook.append_page(tab, Gtk.Label(label="Intercept"))
-        self.sniffing_running = False
 
-    def on_packet_select(self, tree):
-        model, iter = tree.get_selection().get_selected()
-        if iter:
-            self.selected_packet = model[iter][7]
+        self.intercept_start_btn = start_int
+        self.intercept_stop_btn = stop_int
 
-    def capture_selected(self, w):
-        if self.selected_packet:
-            self.captured_packet = self.selected_packet
-            self.captured_label.set_text(f"Захвачен: {self.selected_packet.summary()}")
-            self.int_log.append_safe(f"Пакет захвачен: {self.selected_packet.summary()}", 'success')
-        else:
-            self.int_log.append_safe("Сначала выберите пакет", 'warning')
+        # Подключение события выбора пакета
+        self.intercept_tree.get_selection().connect("changed", self.on_packet_selected)
 
-    def edit_selected(self, w):
-        if not self.selected_packet:
-            self.int_log.append_safe("Сначала выберите пакет", 'warning')
-            return
-        if not SCAPY_AVAILABLE:
-            self.int_log.append_safe("Scapy не установлен, редактирование недоступно", 'error')
-            return
-        def callback(edited, ok):
-            if ok:
-                self.edited_packet = edited
-                self.edited_label.set_text(f"Отредактирован: {edited.summary()}")
-                self.int_log.append_safe(f"Пакет отредактирован: {edited.summary()}", 'success')
-        PacketEditorDialog(self.root, self.selected_packet, callback)
-
-    def send_captured(self, w):
-        if not self.captured_packet:
-            self.int_log.append_safe("Нет захваченного пакета", 'warning')
-            return
-        if not SCAPY_AVAILABLE:
-            self.int_log.append_safe("Scapy не установлен", 'error')
-            return
-        iface = self.int_iface.get_active_text()
+    def packet_callback(self, pkt):
         try:
-            sendp(self.captured_packet, iface=iface, verbose=0)
-            self.int_log.append_safe(f"Захваченный пакет отправлен на {iface}", 'success')
-        except Exception as e:
-            self.int_log.append_safe(f"Ошибка отправки: {e}", 'error')
+            # Проверка лимитов
+            limit_pkts = int(self.intercept_limit_pkts_entry.get_text() or 0)
+            limit_resp = int(self.intercept_limit_resp_entry.get_text() or 0)
 
-    def send_edited(self, w):
-        if not self.edited_packet:
-            self.int_log.append_safe("Нет отредактированного пакета", 'warning')
-            return
-        if not SCAPY_AVAILABLE:
-            self.int_log.append_safe("Scapy не установлен", 'error')
-            return
-        iface = self.int_iface.get_active_text()
-        try:
-            sendp(self.edited_packet, iface=iface, verbose=0)
-            self.int_log.append_safe(f"Отредактированный пакет отправлен на {iface}", 'success')
-        except Exception as e:
-            self.int_log.append_safe(f"Ошибка отправки: {e}", 'error')
+            # Если лимиты установлены и не равны 0, проверяем счетчики
+            if limit_pkts > 0 and self.packet_counter >= limit_pkts:
+                self.sniff_stop.set()
+                return
 
-    def clear_packets(self, w):
-        self.packet_store.clear()
-        self.captured_packets.clear()
-        self.selected_packet = None
-        self.captured_packet = None
-        self.edited_packet = None
-        self.captured_label.set_text("Нет")
-        self.edited_label.set_text("Нет")
-        self.int_log.append_safe("Список очищен", 'info')
+            # Увеличиваем счетчик
+            self.packet_counter += 1
+            num = self.packet_counter
+
+            # Простая эвристика для "ответов" (например, флаги ACK или наличие данных)
+            # В реальном сниффере это сложнее, но для примера считаем каждый пакет за ответ,
+            # если он проходит фильтр, или можно добавить логику TCP ACK
+            is_response = False
+            if TCP in pkt and pkt[TCP].flags & 0x10: # ACK
+                is_response = True
+            elif UDP in pkt or ICMP in pkt:
+                is_response = True
+
+            if is_response:
+                if limit_resp > 0 and self.response_counter >= limit_resp:
+                    self.sniff_stop.set()
+                    return
+                self.response_counter += 1
+
+            time_str = pkt.time
+            src = dst = prot = "N/A"
+            if IP in pkt:
+                src = pkt[IP].src
+                dst = pkt[IP].dst
+            elif IPv6 in pkt:
+                src = pkt[IPv6].src
+                dst = pkt[IPv6].dst
+
+            if TCP in pkt:
+                prot = "TCP"
+            elif UDP in pkt:
+                prot = "UDP"
+            elif ICMP in pkt:
+                prot = "ICMP"
+            elif ARP in pkt:
+                prot = "ARP"
+            else:
+                if Ether in pkt:
+                    prot = hex(pkt[Ether].type)
+
+            GLib.idle_add(self.update_packet_list, num, time_str, src, dst, prot, pkt)
+        except Exception as e:
+            print(f"Ошибка обработки пакета: {e}")
+
+    def update_packet_list(self, num, time_str, src, dst, prot, pkt):
+        self.intercept_store.append([num, str(time_str), src, dst, prot, pkt])
+        self.captured_packets.append(pkt)
 
     def start_sniff(self, w):
         if not is_root():
@@ -1491,160 +1447,142 @@ class GotchaGTK:
             return
         if self.sniffing_running:
             return
-        if not SCAPY_AVAILABLE:
-            self.int_log.append_safe("Scapy не установлен", 'error')
-            return
-        iface = self.int_iface.get_active_text()
-        filt = self.int_filter.get_text().strip() or None
+
+        iface = self.intercept_iface.get_active_text()
+        fltr = self.intercept_filter.get_text()
+
+        # Чтение лимитов
         try:
-            count = int(self.int_count.get_text())
-        except:
-            count = 10
-        try:
-            resp_count = int(self.int_resp.get_text())
-        except:
-            resp_count = 4
+            self.intercept_limit_packets = int(self.intercept_limit_pkts_entry.get_text() or 0)
+            self.intercept_limit_responses = int(self.intercept_limit_resp_entry.get_text() or 0)
+        except ValueError:
+            self.intercept_limit_packets = 0
+            self.intercept_limit_responses = 0
 
         self.sniffing_running = True
-        self.int_start_btn.set_sensitive(False)
-        self.int_stop_btn.set_sensitive(True)
-        self.packet_store.clear()
-        self.captured_packets.clear()
-        self.packet_counter = 0
         self.sniff_stop.clear()
+        self.intercept_status.set_text("Перехват запущен...")
+        self.intercept_start_btn.set_sensitive(False)
+        self.intercept_stop_btn.set_sensitive(True)
 
-        self.int_log.append_safe(f"Перехват запущен на {iface}, фильтр={filt}, count={count}, responses={resp_count}", 'info')
+        self.packet_counter = 0
+        self.response_counter = 0
+        self.captured_packets = []
+        self.intercept_store.clear()
 
-        def callback(pkt):
-            if not self.sniffing_running:
-                return
-            self.packet_counter += 1
-            self.captured_packets.append(pkt)
-            src = dst = proto = info = ""
-            if pkt.haslayer(Ether):
-                if pkt.haslayer(IP):
-                    src = pkt[IP].src
-                    dst = pkt[IP].dst
-                elif pkt.haslayer(IPv6):
-                    src = pkt[IPv6].src
-                    dst = pkt[IPv6].dst
-                if pkt.haslayer(TCP):
-                    proto = "TCP"; info = f"Ports: {pkt[TCP].sport}->{pkt[TCP].dport} Flags: {pkt[TCP].flags}"
-                elif pkt.haslayer(UDP):
-                    proto = "UDP"; info = f"Ports: {pkt[UDP].sport}->{pkt[UDP].dport}"
-                elif pkt.haslayer(ICMP):
-                    proto = "ICMP"; info = f"Type: {pkt[ICMP].type} Code: {pkt[ICMP].code}"
+        def sniff_worker():
+            try:
+                # Если лимиты 0, то stop_filter никогда не вернет True по счетчику,
+                # только если вручную не вызвать sniff_stop.set()
+                sniff(iface=iface, filter=fltr, prn=self.packet_callback, store=False, stop_filter=lambda x: self.sniff_stop.is_set())
+            except Exception as e:
+                print(f"Ошибка перехвата: {e}")
+                GLib.idle_add(self.intercept_status.set_text, f"Ошибка: {e}")
+            finally:
+                self.sniffing_running = False
+                GLib.idle_add(self.intercept_start_btn.set_sensitive, True)
+                GLib.idle_add(self.intercept_stop_btn.set_sensitive, False)
+                if not self.sniff_stop.is_set():
+                     GLib.idle_add(self.intercept_status.set_text, "Перехват завершен (лимит)")
                 else:
-                    proto = "IP"
-                length = len(pkt)
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                GLib.idle_add(self._add_packet, str(self.packet_counter), timestamp, src, dst, proto, str(length), info, pkt)
-                if resp_count > 0 and pkt.haslayer(ICMP) and pkt[ICMP].type == 8:
-                    try:
-                        resp = IP(src=pkt[IP].dst, dst=pkt[IP].src) / ICMP(type=0, id=pkt[ICMP].id, seq=pkt[ICMP].seq)
-                        sendp(Ether()/resp, iface=iface, verbose=0)
-                        GLib.idle_add(self.int_log.append_safe, f"Ответ ICMP отправлен на {pkt[IP].src}", 'info')
-                    except:
-                        pass
+                     GLib.idle_add(self.intercept_status.set_text, "Перехват остановлен вручную")
 
-        self.sniff_thread = threading.Thread(target=self._sniff_worker,
-                                              args=(iface, filt, count, callback), daemon=True)
+        self.sniff_thread = threading.Thread(target=sniff_worker, daemon=True)
         self.sniff_thread.start()
 
-    def _sniff_worker(self, iface, filt, count, callback):
-        try:
-            sniff(iface=iface, filter=filt, count=count, prn=callback,
-                  stop_filter=lambda x: not self.sniffing_running)
-        except Exception as e:
-            GLib.idle_add(self.int_log.append_safe, f"Ошибка сниффинга: {e}", 'error')
-        finally:
-            GLib.idle_add(self.stop_sniff, None)
-
-    def _add_packet(self, num, timestamp, src, dst, proto, length, info, pkt):
-        self.packet_store.append([num, timestamp, src, dst, proto, length, info, pkt])
-
     def stop_sniff(self, w):
-        self.sniffing_running = False
-        self.sniff_stop.set()
-        if self.sniff_thread and self.sniff_thread.is_alive():
-            self.sniff_thread.join(timeout=1)
-        self.int_start_btn.set_sensitive(True)
-        self.int_stop_btn.set_sensitive(False)
-        self.int_log.append_safe("Перехват остановлен", 'warning')
+        if self.sniffing_running:
+            self.sniff_stop.set()
+            self.intercept_status.set_text("Остановка перехвата...")
+            # Кнопки переключатся в finally потока sniff_worker
 
-    # ===== Справка =====
+    def on_packet_selected(self, selection):
+        model, treeiter = selection.get_selected()
+        if treeiter:
+            pkt = model[treeiter][5]
+            if pkt:
+                summary = pkt.summary()
+                details = pkt.show(dump=True)
+                buffer = self.intercept_details.get_buffer()
+                buffer.set_text(f"=== Summary ===\n{summary}\n\n=== Details ===\n{details}")
+
+    def edit_selected_packet(self, w):
+        selection = self.intercept_tree.get_selection()
+        model, treeiter = selection.get_selected()
+        if treeiter:
+            pkt = model[treeiter][5]
+            dialog = PacketEditorDialog(self.root, pkt, self.on_packet_edited)
+            dialog.show_all()
+        else:
+            self.show_warning("Ошибка", "Выберите пакет для редактирования")
+
+    def on_packet_edited(self, edited_pkt, success):
+        if success:
+            self.edited_packet = edited_pkt
+            self.status_var.set_label("Пакет отредактирован, готов к отправке")
+
+    def replay_selected_packet(self, w):
+        if self.edited_packet:
+            iface = self.intercept_iface.get_active_text()
+            try:
+                sendp(self.edited_packet, iface=iface, verbose=False)
+                self.status_var.set_label("Пакет отправлен")
+            except Exception as e:
+                self.show_warning("Ошибка", f"Не удалось отправить: {e}")
+        else:
+            selection = self.intercept_tree.get_selection()
+            model, treeiter = selection.get_selected()
+            if treeiter:
+                pkt = model[treeiter][5]
+                iface = self.intercept_iface.get_active_text()
+                try:
+                    sendp(pkt, iface=iface, verbose=False)
+                    self.status_var.set_label("Пакет отправлен")
+                except Exception as e:
+                    self.show_warning("Ошибка", f"Не удалось отправить: {e}")
+            else:
+                self.show_warning("Ошибка", "Нет пакета для отправки")
+
+    # ===== Вкладка Помощь =====
     def create_help_tab(self):
-        tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         tab.set_margin_start(10)
         tab.set_margin_end(10)
         tab.set_margin_top(10)
         tab.set_margin_bottom(10)
 
-        label = Gtk.Label()
-        label.set_markup("<span size='large' weight='bold'>Руководство пользователя</span>")
-        tab.pack_start(label, False, False, 0)
-
-        desc = Gtk.Label()
-        desc.set_markup(
-            "Данная программа предназначена для тестирования сетевой безопасности.\n"
-            "Подробная документация доступна в файле guide.html."
+        textview = Gtk.TextView()
+        textview.set_editable(False)
+        textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        textbuffer = textview.get_buffer()
+        textbuffer.set_text(
+            "Gotcha Linux - Инструментарий для тестирования сетевой безопасности\n\n"
+            "Инструкции по использованию:\n\n"
+            "- Вкладка 'Доступ': содержит базовые сетевые утилиты (ping, сканирование портов и т.д.)\n"
+            "- Вкладка 'Intercept': перехват пакетов. \n  * Если ввести '0' в поля 'Макс. пакетов' или 'Макс. ответов', \n    перехват будет длиться бесконечно до нажатия кнопки 'Остановить'.\n"
+            "- Вкладка 'DHCP Starvation': исчерпывает IP-адреса DHCP-сервера\n"
+            "- Вкладка 'ARP Spoofing': позволяет провести атаку типа 'человек посередине'\n"
+            "- Вкладка 'DoS атака': генерирует трафик для отказа в обслуживании\n"
+            "- Вкладка 'DNS Spoofing': подменяет DNS-ответы\n"
+            "- Вкладка 'MAC Flood': заполняет таблицу MAC-адресов коммутатора\n\n"
+            "Все атакующие функции требуют прав root.\n"
+            "Авторские права © 2026"
         )
-        desc.set_justify(Gtk.Justification.CENTER)
-        tab.pack_start(desc, False, False, 0)
 
-        btn_guide = Gtk.Button.new_with_label("Открыть guide.html")
-        btn_guide.connect("clicked", self._open_guide)
-        tab.pack_start(btn_guide, False, False, 0)
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.add(textview)
+        tab.pack_start(scrolled, True, True, 0)
 
-        btn_scene = Gtk.Button.new_with_label("Открыть scheme.html (сценарии)")
-        btn_scene.connect("clicked", self._open_scene)
-        tab.pack_start(btn_scene, False, False, 0)
+        self.notebook.append_page(tab, Gtk.Label(label="Помощь"))
 
-        self.notebook.append_page(tab, Gtk.Label(label="Справка"))
-
-    def _open_guide(self, widget):
-        base = os.path.dirname(os.path.abspath(__file__))
-        paths = [
-            os.path.join(base, "guide.html"),
-            os.path.join(base, "other", "guide.html"),
-            os.path.join(base, "doc", "guide.html"),
-        ]
-        for path in paths:
-            if os.path.exists(path):
-                webbrowser.open(path)
-                return
-        self.show_warning("Ошибка", "Файл guide.html не найден.\n"
-                                    "Поместите его в папку с программой или в подпапку other/")
-
-    def _open_scene(self, widget):
-        base = os.path.dirname(os.path.abspath(__file__))
-        paths = [
-            os.path.join(base, "scheme.html"),
-            os.path.join(base, "other", "scheme.html"),
-            os.path.join(base, "doc", "scheme.html"),
-        ]
-        for path in paths:
-            if os.path.exists(path):
-                webbrowser.open(path)
-                return
-        self.show_warning("Ошибка", "Файл scheme.html не найден.\n"
-                                    "Поместите его в папку с программой или в подпапку other/")
-
-    # ===== Закрытие =====
-    def on_closing(self, *args):
-        if self.attack_running:
-            self.stop_binary(None, None)
-        if self.sniffing_running:
-            self.stop_sniff(None)
-        for btn in self.start_buttons:
-            btn.set_sensitive(True)
-        for btn in self.stop_buttons:
-            btn.set_sensitive(False)
+    def on_closing(self, widget):
+        self.stop_all(None)
         Gtk.main_quit()
 
-# ========== Запуск ==========
+    def run(self):
+        Gtk.main()
+
 if __name__ == '__main__':
-    if not is_root():
-        print("Запустите с sudo для полной функциональности.")
     app = GotchaGTK()
-    Gtk.main()
+    app.run()
