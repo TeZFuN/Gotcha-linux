@@ -1,8 +1,0 @@
-# Gotcha — Python dependencies (Windows)
-# Python 3.10+ recommended
-
-scapy>=2.5.0
-psutil>=5.9.0
-
-# Standard library (no install needed):
-# tkinter, threading, subprocess, ctypes, winreg, json, socket, ipaddress, webbrowser
